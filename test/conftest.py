@@ -66,7 +66,7 @@ def init_mock_functions(monkeypatch, rawtransactions_db):
 
     util_test.rawtransactions_db = rawtransactions_db
 
-    def get_unspent_txouts(proxy, address, return_confirmed=False):
+    def get_unspent_txouts(address, return_confirmed=False):
         with open(util_test.CURR_DIR + '/fixtures/unspent_outputs.json', 'r') as listunspent_test_file:
             wallet_unspent = json.load(listunspent_test_file)
             unspent_txouts = [output for output in wallet_unspent if output['address'] == address]
@@ -74,12 +74,6 @@ def init_mock_functions(monkeypatch, rawtransactions_db):
                 return unspent_txouts, unspent_txouts
             else:
                 return unspent_txouts
-
-    def dumpprivkey(source):
-        return DEFAULT_PARAMS['privkey'][source]
-
-    def is_mine(address):
-        return address in DEFAULT_PARAMS['privkey']
 
     def isodt(epoch_time):
         return datetime.utcfromtimestamp(epoch_time).isoformat()
@@ -93,10 +87,10 @@ def init_mock_functions(monkeypatch, rawtransactions_db):
     def init_api_access_log():
         pass
 
-    def pubkeyhash_to_pubkey(proxy, address, provided_pubkeys=None):
+    def pubkeyhash_to_pubkey(address, provided_pubkeys=None):
         return DEFAULT_PARAMS['pubkey'][address]
 
-    def multisig_pubkeyhashes_to_pubkeys(proxy, address, provided_pubkeys=None):
+    def multisig_pubkeyhashes_to_pubkeys(address, provided_pubkeys=None):
         # TODO: Should be updated?!
         array = address.split('_')
         signatures_required = int(array[0])
@@ -109,15 +103,12 @@ def init_mock_functions(monkeypatch, rawtransactions_db):
         return util_test.getrawtransaction(rawtransactions_db, bitcoinlib.core.lx(tx_hash))
 
     monkeypatch.setattr('lib.backend.get_unspent_txouts', get_unspent_txouts)
-    monkeypatch.setattr('lib.backend.dumpprivkey', dumpprivkey)
-    monkeypatch.setattr('lib.backend.is_mine', is_mine)
     monkeypatch.setattr('lib.log.isodt', isodt)
     monkeypatch.setattr('lib.log.curr_time', curr_time)
     monkeypatch.setattr('lib.util.date_passed', date_passed)
     monkeypatch.setattr('lib.api.init_api_access_log', init_api_access_log)
     if hasattr(config, 'PREFIX'):
         monkeypatch.setattr('lib.config.PREFIX', b'TESTXXXX')
-    monkeypatch.setattr('lib.backend.get_proxy', util_test.get_proxy)
-    monkeypatch.setattr('lib.backend.get_cached_raw_transaction', get_cached_raw_transaction)
+    monkeypatch.setattr('lib.backend.getrawtransaction', get_cached_raw_transaction)
     monkeypatch.setattr('lib.backend.pubkeyhash_to_pubkey', pubkeyhash_to_pubkey)
     monkeypatch.setattr('lib.backend.multisig_pubkeyhashes_to_pubkeys', multisig_pubkeyhashes_to_pubkeys)

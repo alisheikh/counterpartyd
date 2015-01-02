@@ -222,7 +222,7 @@ def get_rows(db, table, filters=None, filterop='AND', order_by=None, order_dir=N
 
     return db_query(db, statement, tuple(bindings))
 
-def compose_transaction(db, proxy, name, params,
+def compose_transaction(db, name, params,
                         encoding='auto',
                         fee_per_kb=config.DEFAULT_FEE_PER_KB,
                         regular_dust_size=config.DEFAULT_REGULAR_DUST_SIZE,
@@ -264,7 +264,7 @@ def compose_transaction(db, proxy, name, params,
 
     # try:  # NOTE: For debugging, e.g. with `Invalid Params` error.
     tx_info = compose_method(db, **params)
-    return transaction.construct(db, proxy, tx_info, encoding=encoding,
+    return transaction.construct(db, tx_info, encoding=encoding,
                                         fee_per_kb=fee_per_kb,
                                         regular_dust_size=regular_dust_size,
                                         multisig_dust_size=multisig_dust_size,
@@ -277,28 +277,27 @@ def compose_transaction(db, proxy, name, params,
         # import traceback
         # traceback.print_exc()
 
-def sign_transaction(proxy, unsigned_tx_hex, private_key_wif=None):
-    return transaction.sign_tx(proxy, unsigned_tx_hex,
-        private_key_wif=private_key_wif)
+def sign_transaction(unsigned_tx_hex, private_key_wif):
+    return transaction.sign_tx(unsigned_tx_hex, private_key_wif)
 
-def broadcast_transaction(proxy, signed_tx_hex):
+def broadcast_transaction(signed_tx_hex):
     if not config.TESTNET and config.BROADCAST_TX_MAINNET in ['bci', 'bci-failover']:
         url = "https://blockchain.info/pushtx"
         params = {'tx': signed_tx_hex}
         response = requests.post(url, data=params)
         if response.text.lower() != 'transaction submitted' or response.status_code != 200:
             if config.BROADCAST_TX_MAINNET == 'bci-failover':
-                return transaction.broadcast_tx(proxy, signed_tx_hex)
+                return transaction.broadcast_tx(signed_tx_hex)
             else:
                 raise APIError(response.text)
         return response.text
     else:
-        return transaction.broadcast_tx(proxy, signed_tx_hex)
+        return transaction.broadcast_tx(signed_tx_hex)
 
-def do_transaction(db, proxy, name, params, private_key_wif=None, **kwargs):
-    unsigned_tx = compose_transaction(db, proxy, name, params, **kwargs)
+def do_transaction(db, name, params, private_key_wif, **kwargs):
+    unsigned_tx = compose_transaction(db, name, params, **kwargs)
     signed_tx = sign_transaction(unsigned_tx, private_key_wif=private_key_wif)
-    return broadcast_transaction(proxy, signed_tx)
+    return broadcast_transaction(signed_tx)
 
 def init_api_access_log():
     api_logger = logging.getLogger("tornado")
@@ -313,7 +312,6 @@ class APIStatusPoller(threading.Thread):
         self.last_database_check = 0
         threading.Thread.__init__(self)
         self.stop_event = threading.Event()
-        self.proxy = backend.get_proxy()
 
     def stop(self):
         self.stop_event.set()
@@ -330,10 +328,10 @@ class APIStatusPoller(threading.Thread):
                 if time.time() - self.last_database_check > 10 * 60: # Ten minutes since last check.
                     code = 11
                     logger.debug('Checking backend state.')
-                    check.backend_state(self.proxy)
+                    check.backend_state()
                     code = 12
                     logger.debug('Checking database state.')
-                    check.database_state(db, backend.getblockcount(self.proxy))
+                    check.database_state(db, backend.getblockcount())
                     self.last_database_check = time.time()
             except (check.BackendError, exceptions.DatabaseError) as e:
                 exception_name = e.__class__.__name__
@@ -353,7 +351,6 @@ class APIServer(threading.Thread):
         threading.Thread.__init__(self)
         self.stop_event = threading.Event()
         self.ioloop = IOLoop.instance()
-        self.proxy = backend.get_proxy()
 
     def stop(self):
         self.ioloop.stop()
@@ -418,14 +415,14 @@ class APIServer(threading.Thread):
             def create_method(**kwargs):
                 try:
                     transaction_args, common_args, private_key_wif = split_params(**kwargs)
-                    return compose_transaction(db, self.proxy, name=tx, params=transaction_args, **common_args)
+                    return compose_transaction(db, name=tx, params=transaction_args, **common_args)
                 except TypeError as e:          #TODO: generalise for all API methods
                     raise APIError(str(e))
 
             def do_method(**kwargs):
                 try:
                     transaction_args, common_args, private_key_wif = split_params(**kwargs)
-                    return do_transaction(db, self.proxy, name=tx, params=transaction_args, private_key_wif=private_key_wif, **common_args)
+                    return do_transaction(db, name=tx, params=transaction_args, private_key_wif=private_key_wif, **common_args)
                 except TypeError as e:          #TODO: generalise for all API methods
                     raise APIError(str(e))
 
@@ -440,11 +437,11 @@ class APIServer(threading.Thread):
 
         @dispatcher.add_method
         def sign_tx(unsigned_tx_hex, privkey=None):
-            return sign_transaction(self.proxy, unsigned_tx_hex, private_key_wif=privkey)
+            return sign_transaction(unsigned_tx_hex, private_key_wif=privkey)
 
         @dispatcher.add_method
         def broadcast_tx(signed_tx_hex):
-            return broadcast_transaction(self.proxy, signed_tx_hex)
+            return broadcast_transaction(signed_tx_hex)
 
         @dispatcher.add_method
         def get_messages(block_index):
@@ -490,7 +487,7 @@ class APIServer(threading.Thread):
                 # BTC and XCP.
                 if asset in [config.BTC, config.XCP]:
                     if asset == config.BTC:
-                        supply = backend.get_btc_supply(self.proxy, normalize=False)
+                        supply = backend.get_btc_supply(normalize=False)
                     else:
                         supply = util.xcp_supply(db)
 
@@ -572,7 +569,7 @@ class APIServer(threading.Thread):
 
         @dispatcher.add_method
         def get_running_info():
-            latestBlockIndex = backend.getblockcount(self.proxy)
+            latestBlockIndex = backend.getblockcount()
 
             try:
                 check.database_state(db, latestBlockIndex)
@@ -635,25 +632,15 @@ class APIServer(threading.Thread):
 
         @dispatcher.add_method
         def search_raw_transactions(address):
-            return blockchain.searchrawtransactions(self.proxy, address)
+            return backend.searchrawtransactions(address)
 
         @dispatcher.add_method
         def get_unspent_txouts(address, return_confirmed=False):
-            result = backend.get_unspent_txouts(self.proxy, address, return_confirmed=return_confirmed)
+            result = backend.get_unspent_txouts(address, return_confirmed=return_confirmed)
             if return_confirmed:
                 return {'all': result[0], 'confirmed': result[1]}
             else:
                 return result
-
-        @dispatcher.add_method
-        def get_wallet():
-            # TODO: Dupe with `backend.get_wallet()`
-            wallet = {}
-            for group in backend.listaddressgroupings(self.proxy):
-                for bunch in group:
-                    address, btc_balance = bunch[:2]
-                    wallet[address] = str(btc_balance)
-            return wallet
 
         @dispatcher.add_method
         def get_tx_info(tx_hex):

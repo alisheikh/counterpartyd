@@ -346,19 +346,19 @@ def initialise(db):
 
     cursor.close()
 
-def get_tx_info(proxy, tx_hex, block_index, block_parser=None):
+def get_tx_info(tx_hex, block_index, block_parser=None):
     try:
         if util.enabled('multisig_addresses', block_index):   # Protocol change.
-            tx_info = get_tx_info2(proxy, tx_hex, block_parser=block_parser)
+            tx_info = get_tx_info2(tx_hex, block_parser=block_parser)
         else:
-            tx_info = get_tx_info1(proxy, tx_hex, block_index, block_parser=block_parser)
+            tx_info = get_tx_info1(tx_hex, block_index, block_parser=block_parser)
     except (DecodeError, BTCOnlyError) as e:
         # NOTE: For debugging, logger.debug('Could not decode: ' + str(e))
         tx_info = b'', None, None, None, None
 
     return tx_info
 
-def get_tx_info1(proxy, tx_hex, block_index, block_parser=None):
+def get_tx_info1(tx_hex, block_index, block_parser=None):
     """
     The destination, if it exists, always comes before the data output; the
     change, if it exists, always comes after.
@@ -455,7 +455,8 @@ def get_tx_info1(proxy, tx_hex, block_index, block_parser=None):
             vin_tx = block_parser.read_raw_transaction(ib2h(vin.prevout.hash))
             vin_ctx = backend.deserialize(vin_tx['__data__'])
         else:
-            vin_ctx = backend.getrawtransaction(proxy, vin.prevout.hash)
+            vin_tx = backend.getrawtransaction(ib2h(vin.prevout.hash))
+            vin_ctx = backend.deserialize(vin_tx)
         vout = vin_ctx.vout[vin.prevout.n]
         fee += vout.nValue
 
@@ -473,7 +474,7 @@ def get_tx_info1(proxy, tx_hex, block_index, block_parser=None):
 
     return source, destination, btc_amount, fee, data
 
-def get_tx_info2(proxy, tx_hex, block_parser=None):
+def get_tx_info2(tx_hex, block_parser=None):
     """
     The destinations, if they exists, always comes before the data output; the
     change, if it exists, always comes after.
@@ -580,7 +581,7 @@ def get_tx_info2(proxy, tx_hex, block_parser=None):
             vin_tx = block_parser.read_raw_transaction(ib2h(vin.prevout.hash))
             vin_ctx = backend.deserialize(vin_tx['__data__'])
         else:
-            vin_tx = backend.get_cached_raw_transaction(ib2h(vin.prevout.hash))
+            vin_tx = backend.getrawtransaction(ib2h(vin.prevout.hash))
             vin_ctx = backend.deserialize(vin_tx)
         vout = vin_ctx.vout[vin.prevout.n]
         fee += vout.nValue
@@ -675,12 +676,12 @@ def reparse(db, block_index=None, quiet=False):
     cursor.close()
     return
 
-def list_tx(db, proxy, block_hash, block_index, block_time, tx_hash, tx_index):
+def list_tx(db, block_hash, block_index, block_time, tx_hash, tx_index):
     assert type(tx_hash) == str
 
     # Get the important details about each transaction.
-    tx_dict = backend.get_cached_raw_transaction(tx_hash, verbose=True)
-    source, destination, btc_amount, fee, data = get_tx_info(proxy, tx_dict['hex'], block_index)
+    tx_hex = backend.getrawtransaction(tx_hash)
+    source, destination, btc_amount, fee, data = get_tx_info(tx_hex, block_index)
 
     # For mempool
     if block_hash == None:
@@ -720,7 +721,7 @@ def list_tx(db, proxy, block_hash, block_index, block_time, tx_hash, tx_index):
 
     return tx_index
 
-def kickstart(db, proxy, bitcoind_dir):
+def kickstart(db, bitcoind_dir):
     if bitcoind_dir is None:
         if platform.system() == 'Darwin':
             bitcoind_dir = os.path.expanduser('~/Library/Application Support/Bitcoin/')
@@ -769,7 +770,7 @@ def kickstart(db, proxy, bitcoind_dir):
             # Get `tx_info`s for transactions in this block.
             block = block_parser.read_raw_block(current_hash)
             for tx in block['transactions']:
-                source, destination, btc_amount, fee, data = get_tx_info(proxy, tx['__data__'], block['block_index'], block_parser)
+                source, destination, btc_amount, fee, data = get_tx_info(tx['__data__'], block['block_index'], block_parser)
                 if source and (data or destination == config.UNSPENDABLE):
                     transactions.append((
                         tx['tx_hash'], block['block_index'], block['block_hash'], block['block_time'],
@@ -837,7 +838,7 @@ def get_next_tx_index(db):
 
 class MempoolError(Exception):
     pass
-def follow(db, proxy):
+def follow(db):
     cursor = db.cursor()
 
     # Initialise.
@@ -877,7 +878,7 @@ def follow(db, proxy):
         # If the backend is unreachable and `config.FORCE` is set, just sleep
         # and try again repeatedly.
         try:
-            block_count = backend.getblockcount(proxy)
+            block_count = backend.getblockcount()
         except (ConnectionRefusedError, http.client.CannotSendRequest) as e:
             if config.FORCE:
                 time.sleep(config.BACKEND_POLL_INTERVAL)
@@ -898,8 +899,8 @@ def follow(db, proxy):
                 logger.debug('Checking that block {} is not an orphan.'.format(current_index))
 
                 # Backend parent hash.
-                current_hash_bin = backend.getblockhash(proxy, current_index)
-                current_cblock = backend.getblock(proxy, current_hash_bin)
+                current_hash = backend.getblockhash(current_index)
+                current_cblock = backend.getblock(current_hash)
                 backend_parent = bitcoinlib.core.b2lx(current_cblock.hashPrevBlock)
 
                 # DB parent hash.
@@ -935,9 +936,8 @@ def follow(db, proxy):
             check.version(block_index)
 
             # Get and parse transactions in this block (atomically).
-            block_hash_bin = backend.getblockhash(proxy, current_index)
-            block = backend.getblock(proxy, block_hash_bin)
-            block_hash = bitcoinlib.core.b2lx(block_hash_bin)
+            block_hash = backend.getblockhash(current_index)
+            block = backend.getblock(block_hash)
             previous_block_hash = bitcoinlib.core.b2lx(block.hashPrevBlock)
             block_time = block.nTime
             txhash_list = backend.get_txhash_list(block)
@@ -959,7 +959,7 @@ def follow(db, proxy):
                 # List the transactions in the block.
                 for tx_hash in txhash_list:
                     # TODO: use rpc._batch to get all transactions with one RPC call
-                    tx_index = list_tx(db, proxy, block_hash, block_index, block_time, tx_hash, tx_index)
+                    tx_index = list_tx(db, block_hash, block_index, block_time, tx_hash, tx_index)
 
                 # Parse the transactions in the block.
                 parse_block(db, block_index, block_time)
@@ -975,7 +975,7 @@ def follow(db, proxy):
 
             logger.info('Block: %s (%ss)'%(str(block_index), "{:.2f}".format(time.time() - starttime, 3)))
             # Increment block index.
-            block_count = backend.getblockcount(proxy)
+            block_count = backend.getblockcount()
             block_index += 1
 
         else:
@@ -998,9 +998,7 @@ def follow(db, proxy):
             # and then save those messages.
             # Every transaction in mempool is parsed independently. (DB is rolled back after each one.)
             mempool = []
-            util.MEMPOOL = backend.getrawmempool(proxy)
-            for tx_hash in util.MEMPOOL:
-                tx_hash = bitcoinlib.core.b2lx(tx_hash)
+            for tx_hash in backend.getrawmempool():
 
                 # If already in counterpartyd mempool, copy to new one.
                 if tx_hash in old_mempool_hashes:
@@ -1026,7 +1024,7 @@ def follow(db, proxy):
 
                             # List transaction.
                             try:    # Sometimes the transactions can’t be found: `{'code': -5, 'message': 'No information available about transaction'} Is txindex enabled in Bitcoind?`
-                                mempool_tx_index = list_tx(db, proxy, None, block_index, curr_time, tx_hash, mempool_tx_index)
+                                mempool_tx_index = list_tx(db, None, block_index, curr_time, tx_hash, mempool_tx_index)
                             except backend.BitcoindError:
                                 raise MempoolError
 

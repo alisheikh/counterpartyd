@@ -4,7 +4,7 @@ blockr.io
 import logging
 logger = logging.getLogger(__name__)
 
-from lib import config, util, backend
+from lib import config, util
 
 def get_host():
     if config.BLOCKCHAIN_SERVICE_CONNECT:
@@ -15,8 +15,8 @@ def get_host():
 def check():
     pass
 
-def searchrawtransactions(proxy, address):
-    unconfirmed = backend.unconfirmed_transactions(proxy, address)
+def searchrawtransactions(address):
+    unconfirmed = unconfirmed_transactions(address)
 
     confirmed = []
     txs = util.get_url(get_host() + '/api/v1/address/txs/{}'.format(address), abort_on_error=True)

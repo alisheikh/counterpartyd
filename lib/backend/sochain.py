@@ -4,7 +4,7 @@ chain.sp
 import logging
 logger = logging.getLogger(__name__)
 
-from lib import config, util, backend
+from lib import config, util
 
 def get_host():
     if config.BLOCKCHAIN_SERVICE_CONNECT:
@@ -21,8 +21,8 @@ def sochain_network():
 def check():
     pass
 
-def searchrawtransactions(proxy, address):
-    unconfirmed = backend.unconfirmed_transactions(proxy, address)
+def searchrawtransactions(address):
+    unconfirmed = unconfirmed_transactions(address)
 
     confirmed = []
     txs = util.get_url(get_host() + '/api/v2/get_tx/{}/{}'.format(sochain_network(), address), abort_on_error=True)
